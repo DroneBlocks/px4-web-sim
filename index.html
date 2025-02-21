@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drone Simulation</title>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <style>
+        /* Style the LED ring overlay */
+        #led-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 300px;
+            height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+        }
+        .led {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: white;
+        }
+
+    #hud {
+        position: fixed;
+        top: 10px; /* Adjust as needed */
+        left: 10px;
+        background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent background */
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 5px; /* Space between items */
+        z-index: 100; /* Ensure it's on top of other elements */
+    }
+
+    .hud-item {
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .label {
+        font-weight: bold;
+    }
+
+    .value {
+        margin-left: 10px;
+    }
+
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="hud-item">
+            <span class="label">Flight Mode:</span>
+            <span id="flight-mode" class="value">-</span>
+        </div>
+        <div class="hud-item">
+            <span class="label">Altitude:</span>
+            <span id="altitude" class="value">-</span>
+        </div>
+        <div class="hud-item">
+            <span class="label">Battery:</span>
+            <span id="battery" class="value">-</span>
+        </div>
+    </div>
+    
+    <a-scene>
+        <!-- Lighting -->
+        <a-light type="directional" position="5 10 5" intensity="1"></a-light>
+        <a-light type="ambient" intensity="0.5"></a-light>
+
+        <!-- Camera -->
+        <!-- <a-entity position="0 5 10">
+            <a-camera></a-camera>
+        </a-entity> -->
+
+        <!-- <a-entity id="cameraRig" position="0 5 10">
+            <a-entity id="camera" camera position="0 0 0" look-controls wasd-controls></a-entity>
+        </a-entity>         -->
+
+        <!-- Camera -->
+        <a-entity id="cameraRig" position="0 5 10">
+            <a-entity id="camera" camera position="0 0 0" look-controls wasd-controls></a-entity>
+        </a-entity>     
+
+        <!-- Drone Model with Animation -->
+        <a-entity id="drone" 
+            gltf-model="quadcopter_drone.glb" 
+            position="0 0 0" 
+            rotation="0 180 0" 
+            scale="1 1 1"
+            
+            animation="property: position; to: 0 5 0; dur: 2000; easing: easeInOutQuad; startEvents: takeoff"
+            animation__hover="property: position; to: 0 5 0; dur: 5000; startEvents: hover"
+            animation__land="property: position; to: 0 0 0; dur: 2000; easing: easeInOutQuad; startEvents: land"
+        >
+        </a-entity>
+
+        <!-- Propellers -->
+        <!-- <a-entity id="prop1" geometry="primitive: box; width: 0.5; height: 0.02; depth: 0.1" 
+        material="color: black" position="0.5 0.05 -2" rotation="90 0 0"
+        animation="property: rotation; to: 90 0 360; loop: true; dur: 200; easing: linear">
+        </a-entity> -->
+
+        <!-- <a-entity id="prop2" geometry="primitive: box; width: 0.5; height: 0.02; depth: 0.1" 
+        material="color: black" position="-0.5 0.1 0.5"
+        animation="property: rotation; to: 0 0 360; loop: true; dur: 200; easing: linear">
+        </a-entity>
+
+        <a-entity id="prop3" geometry="primitive: box; width: 0.5; height: 0.02; depth: 0.1" 
+        material="color: black" position="0.5 0.1 -0.5"
+        animation="property: rotation; to: 0 0 360; loop: true; dur: 200; easing: linear">
+        </a-entity>
+
+        <a-entity id="prop4" geometry="primitive: box; width: 0.5; height: 0.02; depth: 0.1" 
+        material="color: black" position="-0.5 0.1 -0.5"
+        animation="property: rotation; to: 0 0 360; loop: true; dur: 200; easing: linear">
+        </a-entity> -->
+
+        <!-- Ground -->
+        <!-- <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#7cfc00"></a-plane> -->
+
+        <!-- <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#7cfc00"
+         material="src: https://cdn.aframe.io/a-painter/images/floor.jpg; repeat: 10 10"></a-plane> -->
+
+         <a-entity id="grid-plane" position="0 0 0" rotation="-90 0 0">
+            <a-plane width="50" height="50" color="#0000ff" opacity="0.25"></a-plane> <!-- Blue grid plane -->
+        </a-entity>
+        
+        <a-entity id="grid-lines"></a-entity>
+
+    </a-scene>
+
+    <div id="led-panel"></div>
+
+    <script>
+
+    /* ROS STUFF */
+    const url = 'ws://0.0.0.0:9090'
+    const ros = new ROSLIB.Ros({ url: url })
+
+    let flight_mode = '';
+    let battery_remaining = 100;
+    let altitude = 0;
+
+    ros.on('connection', function () {
+
+        new ROSLIB.Topic({ ros: ros, name: '/fmu/out/vehicle_odometry' }).subscribe(function(msg) {
+            moveDrone({north: msg.position[0], east: msg.position[1], down: msg.position[2]*-1});
+        });
+
+        new ROSLIB.Topic({ ros: ros, name: '/fmu/out/vehicle_status' }).subscribe(function(msg) {
+            if (msg.nav_state == 15) { // Stabilized
+                for (let i = 0; i < 45; i++) {
+                    setLEDColor(i, 255, 255, 255); // White
+                }
+            } else if (msg.nav_state == 1) { // Altitude
+                for (let i = 0; i < 45; i++) {
+                    setLEDColor(i, 255, 255, 0); // Yellow
+                }
+            } else if (msg.nav_state == 2 ) { // Position
+                for (let i = 0; i < 45; i++) {
+                    setLEDColor(i, 0, 255, 0); // Green
+                }
+            } else {
+                for (let i = 0; i < 45; i++) { // Other flight mode
+                    setLEDColor(i, 0, 0, 0); // Off
+                }
+            }
+
+            updateHUD(msg.nav_state, altitude, battery_remaining);
+        });
+
+        new ROSLIB.Topic({ ros: ros, name: '/fmu/out/battery_status' }).subscribe(function(msg) {
+            battery_remaining = msg.remaining;
+        });
+
+        new ROSLIB.Topic({ ros: ros, name: '/fmu/out/vehicle_global_position' }).subscribe(function(msg) {
+            altitude = msg.alt;
+        });
+
+
+
+    });
+
+    /* END ROS STUFF */
+
+    AFRAME.registerComponent('grid-helper', {
+        init: function () {
+        let scene = this.el.sceneEl;
+        let grid = new THREE.GridHelper(50, 50, 0x000000, 0x000000); // Black lines
+        grid.material.opacity = 1; // Fully visible grid lines
+        this.el.setObject3D('mesh', grid);
+        }
+    });
+
+    document.querySelector('#grid-lines').setAttribute('grid-helper', '');
+
+    AFRAME.registerComponent('follow-drone', {
+        tick: function () {
+            const drone = document.querySelector("#drone");
+            const cameraRig = document.querySelector("#cameraRig");
+
+            if (drone && cameraRig) {
+                let dronePos = drone.getAttribute("position");
+                
+                // Keep the camera behind and above the drone
+                cameraRig.setAttribute("position", {
+                    x: dronePos.x,
+                    y: dronePos.y + 2, // Slightly above
+                    z: dronePos.z + 5  // Behind
+                });
+            }
+        }
+    });
+
+    // Attach follow behavior to the cameraRig
+    document.querySelector("#cameraRig").setAttribute("follow-drone", "");
+
+    function flyToNED(ned, duration = 2000) {
+        const drone = document.querySelector("#drone");
+
+        if (!drone) {
+            console.error("Drone entity not found!");
+            return;
+        }
+
+        // Get current position
+        let currentPos = drone.getAttribute("position");
+
+        // Convert NED (North, East, Down) to A-Frame (X, Z, -Y)
+        let newPosition = {
+            x: ned.east,    // East → X (right)
+            y: ned.down,   // Down → -Y (up)
+            z: -ned.north   // North → -Z (forward)
+        };
+        // Ensure previous animations are removed before adding a new one
+        drone.removeAttribute("animation");
+
+        // Apply animation using a string format
+        drone.setAttribute("animation", 
+            `property: position; 
+            to: ${newPosition.x} ${newPosition.y} ${newPosition.z}; 
+            dur: ${duration}; 
+            easing: easeInOutQuad`);
+
+        console.log(`Flying drone to A-Frame Position:`, newPosition);
+    }
+
+    function applyQuaternionRotation(q) {
+        const drone = document.querySelector("#drone");
+
+        if (!drone) {
+            console.error("Drone entity not found!");
+            return;
+        }
+
+        // Create a THREE.js Quaternion from PX4 (w, x, y, z)
+        let quaternion = new THREE.Quaternion(q[1], q[2], q[3], q[0]); // (x, y, z, w)
+
+        // Convert PX4 (NED) to A-Frame (ENU) by swapping axes
+        let nedToEnu = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI, 0, Math.PI / 2, "XYZ"));
+        quaternion.premultiply(new THREE.Quaternion().setFromRotationMatrix(nedToEnu));
+
+        // Convert to Euler angles (in radians)
+        let euler = new THREE.Euler();
+        euler.setFromQuaternion(quaternion, "ZYX"); // Order: Yaw (Z) → Pitch (Y) → Roll (X)
+
+        // Convert radians to degrees
+        let roll = THREE.MathUtils.radToDeg(euler.x);  // Forward tilt
+        let pitch = THREE.MathUtils.radToDeg(euler.y); // Side tilt
+        let yaw = THREE.MathUtils.radToDeg(euler.z);   // Heading (corrected for ENU frame)
+
+        // Apply rotation to the A-Frame entity
+        drone.setAttribute("rotation", `${pitch} ${yaw} ${-roll}`);
+
+        console.log(`Applied Rotation: Yaw=${yaw}, Pitch=${pitch}, Roll=${roll}`);
+    }
+
+    function moveDrone(ned) {
+        const drone = document.querySelector("#drone");
+        
+        if (!drone) {
+            console.error("Drone entity not found!");
+            return;
+        }
+
+        // Convert NED (North, East, Down) to A-Frame (X, Z, -Y)
+        let newPosition = {
+            x: ned.east,    // East → X (right)
+            y: ned.down,   // Down → -Y (up)
+            z: -ned.north   // North → -Z (forward)
+        };
+
+        // Apply the new position
+        drone.setAttribute("position", newPosition);
+
+        //console.log(`Moved drone to A-Frame Position:`, newPosition);
+    }
+
+    const ledPanel = document.getElementById("led-panel");
+        const numLEDs = 45;
+        const radius = 100; // Radius for positioning LEDs
+        let leds = [];
+
+        // Create LEDs in a circular layout
+        for (let i = 0; i < numLEDs; i++) {
+            let angle = (i / numLEDs) * Math.PI * 2;
+            let x = radius * Math.cos(angle);
+            let y = radius * Math.sin(angle);
+
+            let led = document.createElement("div");
+            led.classList.add("led");
+            led.style.transform = `translate(${x}px, ${y}px)`;
+            led.id = `led-${i}`;
+            ledPanel.appendChild(led);
+            leds.push(led);
+        }
+
+        // Function to update an LED's color dynamically
+        function setLEDColor(index, r, g, b) {
+            let led = document.getElementById(`led-${index}`);
+            if (led) {
+                led.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+            }
+        }
+
+
+        /* HUD STUFF */
+        function updateHUD(flightMode, altitude = 1, battery = 0.75) {
+            document.getElementById('flight-mode').textContent = flightMode;
+            document.getElementById('altitude').textContent = `${metersToFeet(altitude)} ft`;
+            document.getElementById('battery').textContent = (battery * 100).toFixed(0) + '%';
+        }
+
+        function metersToFeet(meters) {
+            const feet = meters * 3.28084;
+            return feet.toFixed(2);
+        }
+        /* HUD STUFF */
+
+// -0.27096298336982727
+// 51.54454040527344
+// -9.3076810836792
+    </script>
+
+
+</body>
+</html>
